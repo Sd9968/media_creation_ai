@@ -166,6 +166,7 @@ const liveTranscriptText = document.getElementById('live-transcript-text');
 const aslModelUrlInput = document.getElementById('asl-model-url');
 const loadAslModelBtn = document.getElementById('load-asl-model-btn');
 const aslModelStatus = document.getElementById('asl-model-status');
+const heroExperienceBtn = document.querySelector('.cta-primary');
 
 const GESTURE_MAP = {
     open_palm: { pipeline: 'pitch', label: 'Open Palm', liveText: 'Hello' },
@@ -1001,6 +1002,15 @@ loadAslModelBtn.addEventListener('click', loadCustomAslModel);
 window.addEventListener('resize', updateGestureOverlaySize);
 if (!window.tf) {
     updateModelStatus('Model: TensorFlow.js unavailable; using heuristic ASL prototype only');
+}
+
+if (heroExperienceBtn) {
+    heroExperienceBtn.addEventListener('click', () => {
+        const target = document.getElementById('live-cam-stage') || document.getElementById('pipeline-demo');
+        if (target) {
+            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+    });
 }
 
 // ── Pipeline Animation ──
