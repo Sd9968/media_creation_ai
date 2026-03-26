@@ -186,7 +186,7 @@ let liveVideoObjectUrl = null;
 let stableGestureKey = null;
 let stableGestureFrames = 0;
 let lastTriggerAt = 0;
-let autoSpeakEnabled = true;
+let autoSpeakEnabled = false;
 const transcriptLines = [];
 let letterBuffer = '';
 let lastLetterCommitAt = 0;
@@ -259,7 +259,9 @@ function speakText(text, interrupt = false) {
 }
 
 function updateModelStatus(message) {
-    aslModelStatus.textContent = message;
+    if (aslModelStatus) {
+        aslModelStatus.textContent = message;
+    }
 }
 
 const DEFAULT_ASL_LABELS = [
@@ -308,12 +310,21 @@ function resolveCaptionToPhrase(rawText) {
     }
 
     // A few practical phrase-level fallbacks from short signer clips.
+    if (/\bSEE\b/.test(normalized) && /\bYOU\b/.test(normalized) && /\bSOON\b/.test(normalized)) return 'SEE YOU SOON';
+    if (/\bHAVE\b/.test(normalized) && /\bNICE\b/.test(normalized) && /\bDAY\b/.test(normalized)) return 'HAVE A NICE DAY';
+    if (/\bGOOD\b/.test(normalized) && /\bMORNING\b/.test(normalized)) return 'GOOD MORNING';
+    if (/\bGOOD\b/.test(normalized) && /\bAFTERNOON\b/.test(normalized)) return 'GOOD AFTERNOON';
+    if (/\bGOOD\b/.test(normalized) && /\bNIGHT\b/.test(normalized)) return 'GOOD NIGHT';
+    if (/\bYOU\b/.test(normalized) && /\bWELCOME\b/.test(normalized)) return 'YOU ARE WELCOME';
+    if (/\bBYE\b/.test(normalized) || /\bGOODBYE\b/.test(normalized)) return 'BYE';
     if (/\bTHANK\b/.test(normalized) && /\bYOU\b/.test(normalized)) return 'THANK YOU';
     if (/\bHELP\b/.test(normalized)) return 'I NEED HELP';
     if (/\bPLEASE\b/.test(normalized)) return 'PLEASE';
     if (/\bHELLO\b/.test(normalized) || /\bHI\b/.test(normalized)) return 'HELLO';
     if (/\bYES\b/.test(normalized)) return 'YES';
     if (/\bNO\b/.test(normalized)) return 'NO';
+    if (/^[A-Z]$/.test(normalized)) return normalized;
+    if (/^\d{1,2}$/.test(normalized)) return normalized;
 
     if (looksLikeMeaningfulPhrase(normalized)) return normalized;
     return null;
@@ -452,6 +463,7 @@ async function predictGestureWithModel(landmarks) {
 }
 
 async function loadCustomAslModel() {
+    if (!aslModelUrlInput || !loadAslModelBtn) return;
     const modelUrl = aslModelUrlInput.value.trim();
     if (!modelUrl) {
         updateModelStatus('Please provide a valid model.json URL.');
@@ -643,10 +655,18 @@ function mapModelLabelToPhrase(label) {
     const upper = normalizePhraseLabel(label);
     const phraseMap = {
         HELLO: 'Hello',
+        HI: 'Hi',
+        BYE: 'Bye',
+        SEE_YOU_SOON: 'See you soon',
+        HAVE_A_NICE_DAY: 'Have a nice day',
+        GOOD_MORNING: 'Good morning',
+        GOOD_AFTERNOON: 'Good afternoon',
+        GOOD_NIGHT: 'Good night',
         YES: 'Yes',
         NO: 'No',
         PLEASE: 'Please',
         THANK_YOU: 'Thank you',
+        YOU_ARE_WELCOME: 'You are welcome',
         SORRY: 'Sorry',
         QUESTION: 'Question',
         HELP: 'I need help',
@@ -758,7 +778,7 @@ async function onHandsResults(results) {
         predictionHistory.length = 0;
         flushLetterBuffer();
         detectedGestureText.textContent = 'Show one hand to camera';
-        detectedMappingText.textContent = 'Supported: open palm, fist, peace, thumbs up, point, ILY';
+        detectedMappingText.textContent = 'Supported basics: hi, hello, bye, thank you, sorry, yes/no, alphabet, numbers';
     }
 
     gestureOverlayCtx.restore();
@@ -998,17 +1018,19 @@ speakTranscriptBtn.addEventListener('click', () => {
     if (transcript) speakText(transcript, true);
 });
 clearTranscriptBtn.addEventListener('click', clearTranscript);
-loadAslModelBtn.addEventListener('click', loadCustomAslModel);
 window.addEventListener('resize', updateGestureOverlaySize);
-if (!window.tf) {
-    updateModelStatus('Model: TensorFlow.js unavailable; using heuristic ASL prototype only');
+if (loadAslModelBtn) {
+    loadAslModelBtn.addEventListener('click', loadCustomAslModel);
 }
 
 if (heroExperienceBtn) {
     heroExperienceBtn.addEventListener('click', () => {
-        const target = document.getElementById('live-cam-stage') || document.getElementById('pipeline-demo');
+        const target = document.getElementById('pipeline-demo');
         if (target) {
-            target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            const nav = document.querySelector('.glass-nav');
+            const navOffset = nav ? nav.getBoundingClientRect().height : 0;
+            const y = target.getBoundingClientRect().top + window.pageYOffset - navOffset - 14;
+            window.scrollTo({ top: Math.max(0, y), behavior: 'smooth' });
         }
     });
 }
@@ -1126,9 +1148,6 @@ function drawWaveform(t) {
     requestAnimationFrame(drawWaveform);
 }
 requestAnimationFrame(drawWaveform);
-
-// ── Auto-demo on page load ──
-setTimeout(() => { runPipeline(); }, 1400);
 
 // Ensure camera stream is released if user closes/reloads.
 window.addEventListener('beforeunload', () => {
