@@ -174,7 +174,13 @@ const GESTURE_MAP = {
     peace: { pipeline: 'question', label: 'Peace', liveText: 'Please repeat' },
     thumbs_up: { pipeline: 'close', label: 'Thumbs Up', liveText: 'Yes' },
     point: { pipeline: 'directive', label: 'Point', liveText: 'You' },
-    ily: { pipeline: 'close', label: 'ILY', liveText: 'I love you' }
+    ily: { pipeline: 'close', label: 'ILY', liveText: 'I love you' },
+    bye_wave: { pipeline: 'close', label: 'Bye Wave', liveText: 'Bye' },
+    hello_wave: { pipeline: 'pitch', label: 'Hello Wave', liveText: 'Hello' },
+    thank_you_motion: { pipeline: 'close', label: 'Thank You Motion', liveText: 'Thank you' },
+    good_morning_motion: { pipeline: 'pitch', label: 'Good Morning Motion', liveText: 'Good morning' },
+    yes_nod: { pipeline: 'close', label: 'Yes Motion', liveText: 'Yes' },
+    sorry_circle: { pipeline: 'question', label: 'Sorry Motion', liveText: 'Sorry' }
 };
 
 let liveHands = null;
@@ -197,6 +203,7 @@ const predictionHistory = [];
 const DEFAULT_PREDICTION_WINDOW = 12;
 const DEFAULT_MIN_STABLE_FRAMES = 7;
 const DEFAULT_MIN_CONFIDENCE = 0.62;
+const MAX_LANDMARK_HISTORY = 24;
 let lastIndexTip = null;
 let lastPinkyTip = null;
 let isOcrRunning = false;
@@ -204,6 +211,7 @@ let hasFinalLivePhrase = false;
 let ocrLastRunAtSec = -1;
 const OCR_INTERVAL_SEC = 1.0;
 const ocrPhraseScores = new Map();
+const landmarkHistory = [];
 
 function updateTranscriptText() {
     liveTranscriptText.textContent = transcriptLines.length
@@ -491,7 +499,27 @@ async function loadCustomAslModel() {
     }
 }
 
-function estimateGesture(landmarks) {
+function averageNumbers(values) {
+    if (!values.length) return 0;
+    return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function countDirectionChanges(values, minStep) {
+    let lastDirection = 0;
+    let changes = 0;
+
+    for (let i = 1; i < values.length; i++) {
+        const delta = values[i] - values[i - 1];
+        if (Math.abs(delta) < minStep) continue;
+        const direction = Math.sign(delta);
+        if (lastDirection && direction !== lastDirection) changes += 1;
+        lastDirection = direction;
+    }
+
+    return changes;
+}
+
+function getHandPoseSnapshot(landmarks) {
     const wrist = landmarks[0];
     const fingerDefs = [
         { name: 'index', tip: 8, pip: 6, mcp: 5 },
@@ -529,16 +557,142 @@ function estimateGesture(landmarks) {
         return thumbReach > thumbBend * 1.08 || thumbSpan > 0.09;
     }
 
+    const thumbTip = landmarks[4];
+    const indexTip = landmarks[8];
+    const middleTip = landmarks[12];
+    const pinkyTip = landmarks[20];
+    const indexMcp = landmarks[5];
+    const middleMcp = landmarks[9];
+    const ringMcp = landmarks[13];
+    const pinkyMcp = landmarks[17];
     const indexUp = fingerExtended(fingerDefs[0]);
     const middleUp = fingerExtended(fingerDefs[1]);
     const ringUp = fingerExtended(fingerDefs[2]);
     const pinkyUp = fingerExtended(fingerDefs[3]);
     const thumbUp = thumbExtended();
-    const thumbTip = landmarks[4];
-    const indexTip = landmarks[8];
-    const pinkyTip = landmarks[20];
     const thumbToIndex = dist(thumbTip, indexTip);
     const raisedCount = [thumbUp, indexUp, middleUp, ringUp, pinkyUp].filter(Boolean).length;
+
+    return {
+        wrist: { x: wrist.x, y: wrist.y, z: wrist.z },
+        palmCenter: {
+            x: averageNumbers([wrist.x, indexMcp.x, middleMcp.x, ringMcp.x, pinkyMcp.x]),
+            y: averageNumbers([wrist.y, indexMcp.y, middleMcp.y, ringMcp.y, pinkyMcp.y]),
+            z: averageNumbers([wrist.z, indexMcp.z, middleMcp.z, ringMcp.z, pinkyMcp.z])
+        },
+        indexTip: { x: indexTip.x, y: indexTip.y, z: indexTip.z },
+        middleTip: { x: middleTip.x, y: middleTip.y, z: middleTip.z },
+        thumbTip: { x: thumbTip.x, y: thumbTip.y, z: thumbTip.z },
+        pinkyTip: { x: pinkyTip.x, y: pinkyTip.y, z: pinkyTip.z },
+        indexUp,
+        middleUp,
+        ringUp,
+        pinkyUp,
+        thumbUp,
+        raisedCount,
+        thumbToIndex,
+        openPalm: raisedCount >= 4 || (thumbToIndex < 0.05 && middleUp && ringUp && pinkyUp),
+        fist: raisedCount <= 1,
+        peace: indexUp && middleUp && !ringUp && !pinkyUp && !thumbUp,
+        thumbsUp: thumbUp && !indexUp && !middleUp && !ringUp && !pinkyUp,
+        point: indexUp && !middleUp && !ringUp && !pinkyUp,
+        ily: thumbUp && indexUp && !middleUp && !ringUp && pinkyUp,
+        handScale: averageNumbers([
+            dist(wrist, indexMcp),
+            dist(wrist, pinkyMcp),
+            dist(indexMcp, pinkyMcp),
+            dist(wrist, middleTip)
+        ])
+    };
+}
+
+function pushLandmarkHistory(landmarks) {
+    const snapshot = {
+        ...getHandPoseSnapshot(landmarks),
+        time: performance.now()
+    };
+
+    landmarkHistory.push(snapshot);
+    if (landmarkHistory.length > MAX_LANDMARK_HISTORY) landmarkHistory.shift();
+    return snapshot;
+}
+
+function resetLandmarkHistory() {
+    landmarkHistory.length = 0;
+}
+
+function detectSequenceGesture() {
+    if (landmarkHistory.length < 8) return null;
+
+    const recent = landmarkHistory.slice(-Math.min(18, landmarkHistory.length));
+    const avgScale = Math.max(0.035, averageNumbers(recent.map(frame => frame.handScale)));
+    const openRatio = recent.filter(frame => frame.openPalm).length / recent.length;
+    const fistRatio = recent.filter(frame => frame.fist).length / recent.length;
+    const xValues = recent.map(frame => frame.palmCenter.x);
+    const yValues = recent.map(frame => frame.palmCenter.y);
+    const xRange = Math.max(...xValues) - Math.min(...xValues);
+    const yRange = Math.max(...yValues) - Math.min(...yValues);
+    const xChanges = countDirectionChanges(xValues, avgScale * 0.18);
+    const yChanges = countDirectionChanges(yValues, avgScale * 0.15);
+    const start = recent[0];
+    const end = recent[recent.length - 1];
+    const dx = end.palmCenter.x - start.palmCenter.x;
+    const dy = end.palmCenter.y - start.palmCenter.y;
+    const meanY = averageNumbers(yValues);
+
+    if (openRatio >= 0.72 && xRange > avgScale * 0.95 && xChanges >= 2 && yRange < avgScale * 1.2) {
+        const isHelloZone = meanY < 0.42;
+        return {
+            key: isHelloZone ? 'hello_wave' : 'bye_wave',
+            label: isHelloZone ? 'HELLO' : 'BYE',
+            confidence: Math.min(0.94, 0.72 + xChanges * 0.06),
+            source: 'sequence'
+        };
+    }
+
+    if (openRatio >= 0.7 && meanY > 0.42 && (start.palmCenter.y - end.palmCenter.y) > avgScale * 0.82 && xRange < avgScale * 1.05) {
+        return {
+            key: 'good_morning_motion',
+            label: 'GOOD_MORNING',
+            confidence: 0.79,
+            source: 'sequence'
+        };
+    }
+
+    if (openRatio >= 0.68 && start.palmCenter.y < 0.48 && dy > avgScale * 0.45 && Math.abs(dx) < avgScale * 1.05 && yChanges <= 1) {
+        return {
+            key: 'thank_you_motion',
+            label: 'THANK_YOU',
+            confidence: 0.81,
+            source: 'sequence'
+        };
+    }
+
+    if (fistRatio >= 0.7 && yRange > avgScale * 0.75 && yChanges >= 1 && xRange < avgScale * 0.85) {
+        return {
+            key: 'yes_nod',
+            label: 'YES',
+            confidence: 0.76,
+            source: 'sequence'
+        };
+    }
+
+    if (fistRatio >= 0.68 && xRange > avgScale * 0.52 && yRange > avgScale * 0.52 && xChanges >= 1 && yChanges >= 1) {
+        return {
+            key: 'sorry_circle',
+            label: 'SORRY',
+            confidence: 0.72,
+            source: 'sequence'
+        };
+    }
+
+    return null;
+}
+
+function estimateGesture(landmarks) {
+    const pose = getHandPoseSnapshot(landmarks);
+    const indexTip = pose.indexTip;
+    const pinkyTip = pose.pinkyTip;
     const indexDx = lastIndexTip ? indexTip.x - lastIndexTip.x : 0;
     const indexDy = lastIndexTip ? indexTip.y - lastIndexTip.y : 0;
     const pinkyDx = lastPinkyTip ? pinkyTip.x - lastPinkyTip.x : 0;
@@ -546,8 +700,8 @@ function estimateGesture(landmarks) {
     lastIndexTip = { x: indexTip.x, y: indexTip.y };
     lastPinkyTip = { x: pinkyTip.x, y: pinkyTip.y };
 
-    const indexMovingZLike = indexUp && Math.abs(indexDx) > 0.015 && Math.abs(indexDy) > 0.008;
-    const pinkyMovingJLike = pinkyUp && !indexUp && Math.abs(pinkyDx) > 0.01 && pinkyDy > 0.004;
+    const indexMovingZLike = pose.indexUp && Math.abs(indexDx) > 0.015 && Math.abs(indexDy) > 0.008;
+    const pinkyMovingJLike = pose.pinkyUp && !pose.indexUp && Math.abs(pinkyDx) > 0.01 && pinkyDy > 0.004;
 
     if (indexMovingZLike) {
         return { key: 'model_z', label: 'Z', confidence: 0.68 };
@@ -556,30 +710,30 @@ function estimateGesture(landmarks) {
         return { key: 'model_j', label: 'J', confidence: 0.66 };
     }
 
-    if (indexUp && !middleUp && !ringUp && !pinkyUp) {
+    if (pose.point) {
         return { key: 'point', confidence: 0.9 };
     }
-    if (thumbUp && indexUp && !middleUp && !ringUp && pinkyUp) {
+    if (pose.ily) {
         return { key: 'ily', confidence: 0.85 };
     }
-    if (thumbUp && !indexUp && !middleUp && !ringUp && !pinkyUp) {
+    if (pose.thumbsUp) {
         return { key: 'thumbs_up', confidence: 0.92 };
     }
-    if (indexUp && middleUp && !ringUp && !pinkyUp && !thumbUp) {
+    if (pose.peace) {
         return { key: 'peace', confidence: 0.9 };
     }
-    if (!indexUp && !middleUp && !ringUp && !pinkyUp && !thumbUp) {
+    if (pose.fist) {
         return { key: 'fist', confidence: 0.87 };
     }
-    if (indexUp && middleUp && ringUp && pinkyUp && thumbUp) {
+    if (pose.openPalm && pose.raisedCount === 5) {
         return { key: 'open_palm', confidence: 0.9 };
     }
-    if (thumbToIndex < 0.05 && middleUp && ringUp && pinkyUp) {
+    if (pose.openPalm) {
         return { key: 'open_palm', confidence: 0.65 };
     }
 
-    if (raisedCount >= 4) return { key: 'open_palm', confidence: 0.72 };
-    if (raisedCount <= 1) return { key: 'fist', confidence: 0.68 };
+    if (pose.raisedCount >= 4) return { key: 'open_palm', confidence: 0.72 };
+    if (pose.raisedCount <= 1) return { key: 'fist', confidence: 0.68 };
     return null;
 }
 
@@ -621,6 +775,9 @@ function triggerFromLiveGesture(gestureKey) {
 
 function reducePredictionNoise(prediction) {
     const thresholds = getAdaptiveThresholds();
+    const requiredFrames = prediction.source === 'sequence'
+        ? Math.max(2, thresholds.stableFrames - 2)
+        : thresholds.stableFrames;
     predictionHistory.push(prediction);
     if (predictionHistory.length > thresholds.window) predictionHistory.shift();
 
@@ -639,7 +796,7 @@ function reducePredictionNoise(prediction) {
     if (!best) return null;
 
     const avgConf = best.confSum / best.count;
-    if (best.count < thresholds.stableFrames || avgConf < thresholds.minConfidence) return null;
+    if (best.count < requiredFrames || avgConf < thresholds.minConfidence) return null;
 
     return { ...best.pred, confidence: avgConf };
 }
@@ -682,6 +839,9 @@ function handleStablePrediction(prediction) {
     if (liveSourceType === 'video' && hasFinalLivePhrase) return;
 
     const thresholds = getAdaptiveThresholds();
+    const requiredFrames = prediction.source === 'sequence'
+        ? Math.max(2, thresholds.stableFrames - 2)
+        : thresholds.stableFrames;
     const now = Date.now();
     if (stableGestureKey === prediction.key) {
         stableGestureFrames += 1;
@@ -690,14 +850,14 @@ function handleStablePrediction(prediction) {
         stableGestureFrames = 1;
     }
 
-    if (stableGestureFrames < thresholds.stableFrames || now - lastTriggerAt < 1300) return;
+    if (stableGestureFrames < requiredFrames || now - lastTriggerAt < 1300) return;
     lastTriggerAt = now;
 
     const mapped = GESTURE_MAP[prediction.key];
     if (mapped) {
         // For uploaded videos without a dedicated ASL model, avoid forcing
         // heuristic gesture intents into transcript (causes wrong phrases).
-        if (liveSourceType === 'video' && !aslModel) {
+        if (liveSourceType === 'video' && !aslModel && prediction.source !== 'sequence') {
             detectedMappingText.textContent = mapped.label;
             return;
         }
@@ -751,11 +911,15 @@ async function onHandsResults(results) {
         drawConnectors(gestureOverlayCtx, landmarks, HAND_CONNECTIONS, { color: '#00F5FF', lineWidth: 2 });
         drawLandmarks(gestureOverlayCtx, landmarks, { color: '#8B3DFF', lineWidth: 1, radius: 3 });
 
+        pushLandmarkHistory(landmarks);
+        const sequencePrediction = detectSequenceGesture();
         const heuristicPrediction = estimateGesture(landmarks);
         const modelPrediction = await predictGestureWithModel(landmarks);
-        const estimated = modelPrediction && modelPrediction.confidence >= 0.5
-            ? modelPrediction
-            : heuristicPrediction;
+        const estimated = sequencePrediction || (
+            modelPrediction && modelPrediction.confidence >= 0.5
+                ? modelPrediction
+                : heuristicPrediction
+        );
         if (estimated) {
             const displayToken = estimated.label || estimated.key.replace('model_', '').replace('_', ' ');
             detectedGestureText.textContent = `${String(displayToken).toUpperCase()} (${Math.round(estimated.confidence * 100)}%)`;
@@ -770,12 +934,15 @@ async function onHandsResults(results) {
             predictionHistory.length = 0;
             flushLetterBuffer();
             detectedGestureText.textContent = 'Hand found, unclear gesture';
-            detectedMappingText.textContent = 'Hold a supported sign longer';
+            detectedMappingText.textContent = 'Hold the pose or finish the motion path';
         }
     } else {
         stableGestureKey = null;
         stableGestureFrames = 0;
         predictionHistory.length = 0;
+        resetLandmarkHistory();
+        lastIndexTip = null;
+        lastPinkyTip = null;
         flushLetterBuffer();
         detectedGestureText.textContent = 'Show one hand to camera';
         detectedMappingText.textContent = 'Supported basics: hi, hello, bye, thank you, sorry, yes/no, alphabet, numbers';
@@ -892,7 +1059,9 @@ async function startLiveGestureDetection(sourceType = 'camera', selectedFile = n
         stableGestureKey = null;
         stableGestureFrames = 0;
         predictionHistory.length = 0;
+        resetLandmarkHistory();
         letterBuffer = '';
+        lastTriggerAt = 0;
         lastIndexTip = null;
         lastPinkyTip = null;
         hasFinalLivePhrase = false;
@@ -954,8 +1123,10 @@ function stopLiveGestureDetection(options = {}) {
     stableGestureKey = null;
     stableGestureFrames = 0;
     predictionHistory.length = 0;
+    resetLandmarkHistory();
     lastIndexTip = null;
     lastPinkyTip = null;
+    lastTriggerAt = 0;
     ocrLastRunAtSec = -1;
     ocrPhraseScores.clear();
     startCameraBtn.disabled = false;
