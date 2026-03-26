@@ -137,6 +137,12 @@ const OUTPUT_TEXT = {
 };
 
 const METRICS = { latency: '2ms', confidence: '97.4%', grammar: 'ASL→EN', voice: '99.1%' };
+const DEFAULT_METRICS = {
+    latency: 'Always On',
+    confidence: 'Context Aware',
+    grammar: 'Motion First',
+    voice: 'Speech Ready'
+};
 
 let currentVoice = 'executive';
 let currentGesture = 'pitch';
@@ -1174,7 +1180,7 @@ async function startLiveGestureDetection(sourceType = 'camera', selectedFile = n
         ocrLastRunAtSec = -1;
         ocrPhraseScores.clear();
         startCameraBtn.disabled = true;
-        startScreenBtn.disabled = true;
+        if (startScreenBtn) startScreenBtn.disabled = true;
         uploadVideoBtn.disabled = true;
         stopCameraBtn.disabled = false;
         detectedGestureText.textContent = sourceType === 'screen'
@@ -1194,7 +1200,7 @@ async function startLiveGestureDetection(sourceType = 'camera', selectedFile = n
         resetLiveDetectionUI('Permission denied or input source unavailable');
         liveGestureActive = false;
         startCameraBtn.disabled = false;
-        startScreenBtn.disabled = false;
+        if (startScreenBtn) startScreenBtn.disabled = false;
         uploadVideoBtn.disabled = false;
         stopCameraBtn.disabled = true;
     }
@@ -1236,7 +1242,7 @@ function stopLiveGestureDetection(options = {}) {
     ocrLastRunAtSec = -1;
     ocrPhraseScores.clear();
     startCameraBtn.disabled = false;
-    startScreenBtn.disabled = false;
+    if (startScreenBtn) startScreenBtn.disabled = false;
     uploadVideoBtn.disabled = false;
     stopCameraBtn.disabled = true;
     if (!preserveUi) {
@@ -1261,7 +1267,9 @@ document.querySelectorAll('.gesture-btn').forEach(btn => {
 });
 
 startCameraBtn.addEventListener('click', () => startLiveGestureDetection('camera'));
-startScreenBtn.addEventListener('click', () => startLiveGestureDetection('screen'));
+if (startScreenBtn) {
+    startScreenBtn.addEventListener('click', () => startLiveGestureDetection('screen'));
+}
 uploadVideoBtn.addEventListener('click', () => uploadVideoInput.click());
 uploadVideoInput.addEventListener('change', event => {
     const [file] = event.target.files || [];
@@ -1305,7 +1313,10 @@ function runPipeline() {
 
     // Reset
     stepCards.forEach(c => { c.classList.remove('active', 'complete'); });
-    metricValues.forEach(v => v.textContent = '—');
+    Object.entries(DEFAULT_METRICS).forEach(([metricKey, value]) => {
+        const metricValue = document.querySelector(`.metric-card[data-metric="${metricKey}"] .metric-value`);
+        if (metricValue) metricValue.textContent = value;
+    });
     if (twText) twText.textContent = '';
     waveformActive = false;
 
