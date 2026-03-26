@@ -1251,21 +1251,6 @@ function stopLiveGestureDetection(options = {}) {
 }
 
 // ── Voice Chip Toggle ──
-document.querySelectorAll('.voice-chip').forEach(chip => {
-    chip.addEventListener('click', () => {
-        document.querySelectorAll('.voice-chip').forEach(c => c.classList.remove('active'));
-        chip.classList.add('active');
-        currentVoice = chip.dataset.voice;
-        // Update waveform color live
-        drawWaveformColor = VOICE_COLORS[currentVoice];
-        // If not running, update text immediately
-        if (!pipelineRunning && !liveGestureActive) {
-            typewriterAnimate(OUTPUT_TEXT[currentGesture][currentVoice]);
-        }
-    });
-});
-
-// ── Gesture Trigger Buttons ──
 document.querySelectorAll('.gesture-btn').forEach(btn => {
     btn.addEventListener('click', () => {
         if (pipelineRunning) return;
@@ -1321,7 +1306,7 @@ function runPipeline() {
     // Reset
     stepCards.forEach(c => { c.classList.remove('active', 'complete'); });
     metricValues.forEach(v => v.textContent = '—');
-    twText.textContent = '';
+    if (twText) twText.textContent = '';
     waveformActive = false;
 
     const metricKeys = ['latency', 'confidence', 'grammar', 'voice'];
@@ -1368,6 +1353,7 @@ function runPipeline() {
 // ── Typewriter ──
 function typewriterAnimate(text) {
     clearInterval(twInterval);
+    if (!twText) return;
     twText.textContent = '';
     let idx = 0;
     twInterval = setInterval(() => {
@@ -1381,51 +1367,63 @@ function typewriterAnimate(text) {
 
 // ── Waveform Canvas ──
 const wfCanvas = document.getElementById('waveform-canvas');
-const wfCtx = wfCanvas.getContext('2d');
+const wfCtx = wfCanvas ? wfCanvas.getContext('2d') : null;
 let waveformActive = false;
 let drawWaveformColor = VOICE_COLORS.executive;
 
-function resizeWf() { wfCanvas.width = wfCanvas.parentElement.clientWidth; }
+function resizeWf() {
+    if (!wfCanvas) return;
+    wfCanvas.width = wfCanvas.parentElement.clientWidth;
+}
 window.addEventListener('resize', resizeWf); resizeWf();
 
 function drawWaveform(t) {
+    if (!wfCanvas || !wfCtx) return;
     const w = wfCanvas.width, h = wfCanvas.height;
     wfCtx.clearRect(0, 0, w, h);
     const mid = h / 2;
 
     if (!waveformActive) {
-        // Idle flat line
-        wfCtx.beginPath();
-        wfCtx.moveTo(0, mid);
-        wfCtx.lineTo(w, mid);
-        wfCtx.strokeStyle = 'rgba(238,241,255,0.08)';
-        wfCtx.lineWidth = 1;
-        wfCtx.stroke();
+        const barCount = 8;
+        const gap = 8;
+        const barWidth = 8;
+        const totalWidth = barCount * barWidth + (barCount - 1) * gap;
+        const startX = (w - totalWidth) / 2;
+        for (let i = 0; i < barCount; i++) {
+            const barHeight = 14 + Math.sin((t * 0.0015) + i * 0.55) * 4;
+            const x = startX + i * (barWidth + gap);
+            const y = (h - barHeight) / 2;
+            const gradient = wfCtx.createLinearGradient(0, y, 0, y + barHeight);
+            gradient.addColorStop(0, 'rgba(0, 245, 255, 0.6)');
+            gradient.addColorStop(1, 'rgba(139, 61, 255, 0.35)');
+            wfCtx.fillStyle = gradient;
+            wfCtx.fillRect(x, y, barWidth, barHeight);
+        }
     } else {
-        const layers = [
-            { amp: 10, freq: 1.8, opacity: 1.0 },
-            { amp: 6, freq: 3.2, opacity: 0.5 },
-            { amp: 3, freq: 5.0, opacity: 0.3 }
-        ];
-        layers.forEach(l => {
-            wfCtx.beginPath();
-            for (let x = 0; x < w; x++) {
-                const y = mid + Math.sin((x * l.freq * 0.01) + t * 0.003) * l.amp;
-                x === 0 ? wfCtx.moveTo(x, y) : wfCtx.lineTo(x, y);
-            }
-            wfCtx.strokeStyle = drawWaveformColor;
-            wfCtx.globalAlpha = l.opacity;
-            wfCtx.lineWidth = 1.5;
-            wfCtx.shadowBlur = 8;
+        const barCount = 8;
+        const gap = 8;
+        const barWidth = 8;
+        const totalWidth = barCount * barWidth + (barCount - 1) * gap;
+        const startX = (w - totalWidth) / 2;
+        for (let i = 0; i < barCount; i++) {
+            const amplitude = 20 + Math.sin((t * 0.006) + i * 0.8) * 12 + (i % 2 ? 5 : 0);
+            const barHeight = Math.max(16, amplitude);
+            const x = startX + i * (barWidth + gap);
+            const y = mid - barHeight / 2;
+            const gradient = wfCtx.createLinearGradient(0, y, 0, y + barHeight);
+            gradient.addColorStop(0, 'rgba(0, 245, 255, 0.98)');
+            gradient.addColorStop(0.5, drawWaveformColor);
+            gradient.addColorStop(1, 'rgba(78, 28, 153, 0.9)');
+            wfCtx.fillStyle = gradient;
+            wfCtx.shadowBlur = 14;
             wfCtx.shadowColor = drawWaveformColor;
-            wfCtx.stroke();
-            wfCtx.globalAlpha = 1;
+            wfCtx.fillRect(x, y, barWidth, barHeight);
             wfCtx.shadowBlur = 0;
-        });
+        }
     }
     requestAnimationFrame(drawWaveform);
 }
-requestAnimationFrame(drawWaveform);
+if (wfCanvas && wfCtx) requestAnimationFrame(drawWaveform);
 
 // Ensure camera stream is released if user closes/reloads.
 window.addEventListener('beforeunload', () => {
