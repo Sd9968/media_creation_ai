@@ -169,7 +169,7 @@ const aslModelStatus = document.getElementById('asl-model-status');
 const heroExperienceBtn = document.querySelector('.cta-primary');
 
 const GESTURE_MAP = {
-    open_palm: { pipeline: 'pitch', label: 'Open Palm', liveText: 'Hello' },
+    open_palm: { pipeline: 'pitch', label: 'Open Palm', liveText: 'Open hand detected' },
     fist: { pipeline: 'directive', label: 'Fist', liveText: 'Stop' },
     peace: { pipeline: 'question', label: 'Peace', liveText: 'Please repeat' },
     thumbs_up: { pipeline: 'close', label: 'Thumbs Up', liveText: 'Yes' },
@@ -640,7 +640,13 @@ function detectSequenceGesture() {
     const dy = end.palmCenter.y - start.palmCenter.y;
     const meanY = averageNumbers(yValues);
 
-    if (openRatio >= 0.72 && xRange > avgScale * 0.95 && xChanges >= 2 && yRange < avgScale * 1.2) {
+    if (
+        openRatio >= 0.76 &&
+        xRange > avgScale * 1.15 &&
+        xChanges >= 3 &&
+        Math.abs(dx) < avgScale * 0.9 &&
+        yRange < avgScale * 1.1
+    ) {
         const isHelloZone = meanY < 0.42;
         return {
             key: isHelloZone ? 'hello_wave' : 'bye_wave',
@@ -728,11 +734,10 @@ function estimateGesture(landmarks) {
     if (pose.openPalm && pose.raisedCount === 5) {
         return { key: 'open_palm', confidence: 0.9 };
     }
-    if (pose.openPalm) {
+    if (pose.openPalm && pose.raisedCount >= 4) {
         return { key: 'open_palm', confidence: 0.65 };
     }
 
-    if (pose.raisedCount >= 4) return { key: 'open_palm', confidence: 0.72 };
     if (pose.raisedCount <= 1) return { key: 'fist', confidence: 0.68 };
     return null;
 }
@@ -855,6 +860,10 @@ function handleStablePrediction(prediction) {
 
     const mapped = GESTURE_MAP[prediction.key];
     if (mapped) {
+        if (prediction.key === 'open_palm' && prediction.source !== 'sequence') {
+            detectedMappingText.textContent = mapped.label;
+            return;
+        }
         // For uploaded videos without a dedicated ASL model, avoid forcing
         // heuristic gesture intents into transcript (causes wrong phrases).
         if (liveSourceType === 'video' && !aslModel && prediction.source !== 'sequence') {
