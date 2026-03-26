@@ -439,6 +439,17 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 700; }
     z-index: 1;
     max-width: 90%;
 }
+.live-transcript-voice-selector {
+    margin-top: 1rem;
+    justify-content: flex-start;
+    position: relative;
+    z-index: 1;
+    flex-wrap: wrap;
+}
+.live-transcript-voice-selector .voice-chip {
+    background: rgba(255, 255, 255, 0.025);
+    border-color: rgba(238, 241, 255, 0.1);
+}
 .live-transcript-wave {
     height: 40px;
     display: flex;
@@ -836,6 +847,7 @@ h1, h2, h3 { font-family: var(--font-display); font-weight: 700; }
     .live-conversation-controls { gap: 0.5rem; }
     .live-transcript-head { flex-wrap: wrap; align-items: flex-start; }
     .live-transcript-text { max-width: 100%; }
+    .live-transcript-voice-selector { justify-content: center; }
     .model-loader-row { flex-direction: column; align-items: stretch; }
 }
 @media (max-width: 600px) {
