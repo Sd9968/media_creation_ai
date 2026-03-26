@@ -217,9 +217,9 @@ const landmarkHistory = [];
 const twoHandHistory = [];
 
 function updateTranscriptText() {
-    liveTranscriptText.textContent = transcriptLines.length
+    liveTranscriptText.value = transcriptLines.length
         ? transcriptLines.join(' ')
-        : 'Waiting for live input...';
+        : '';
 }
 
 function addTranscriptLine(text) {
@@ -251,6 +251,14 @@ function clearTranscript() {
     letterBuffer = '';
     hasFinalLivePhrase = false;
     updateTranscriptText();
+}
+
+function syncTranscriptLinesFromEditor() {
+    const manualText = String(liveTranscriptText?.value || '').trim();
+    transcriptLines.length = 0;
+    if (manualText) {
+        transcriptLines.push(manualText);
+    }
 }
 
 function setActiveGestureButton(gestureKey) {
@@ -978,7 +986,7 @@ function handleStablePrediction(prediction) {
             if (now - lastLetterCommitAt > 600) {
                 letterBuffer += prediction.label;
                 if (letterBuffer.length > 24) letterBuffer = letterBuffer.slice(-24);
-                liveTranscriptText.textContent = transcriptLines.length
+                liveTranscriptText.value = transcriptLines.length
                     ? `${transcriptLines.join(' ')} ${letterBuffer}`
                     : letterBuffer;
                 lastLetterCommitAt = now;
@@ -1283,10 +1291,11 @@ autoSpeakBtn.addEventListener('click', () => {
     autoSpeakBtn.textContent = `Auto Speak: ${autoSpeakEnabled ? 'ON' : 'OFF'}`;
 });
 speakTranscriptBtn.addEventListener('click', () => {
-    const transcript = transcriptLines.join(' ');
+    const transcript = String(liveTranscriptText.value || '').trim();
     if (transcript) speakText(transcript, true);
 });
 clearTranscriptBtn.addEventListener('click', clearTranscript);
+liveTranscriptText.addEventListener('input', syncTranscriptLinesFromEditor);
 window.addEventListener('resize', updateGestureOverlaySize);
 if (loadAslModelBtn) {
     loadAslModelBtn.addEventListener('click', loadCustomAslModel);
