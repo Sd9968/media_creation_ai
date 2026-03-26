@@ -179,6 +179,8 @@ const GESTURE_MAP = {
     hello_wave: { pipeline: 'pitch', label: 'Hello Wave', liveText: 'Hello' },
     thank_you_motion: { pipeline: 'close', label: 'Thank You Motion', liveText: 'Thank you' },
     good_morning_motion: { pipeline: 'pitch', label: 'Good Morning Motion', liveText: 'Good morning' },
+    good_evening_motion: { pipeline: 'pitch', label: 'Good Evening Motion', liveText: 'Good evening' },
+    good_afternoon_everyone: { pipeline: 'pitch', label: 'Good Afternoon Everyone', liveText: 'Good afternoon everyone' },
     yes_nod: { pipeline: 'close', label: 'Yes Motion', liveText: 'Yes' },
     sorry_circle: { pipeline: 'question', label: 'Sorry Motion', liveText: 'Sorry' }
 };
@@ -212,6 +214,7 @@ let ocrLastRunAtSec = -1;
 const OCR_INTERVAL_SEC = 1.0;
 const ocrPhraseScores = new Map();
 const landmarkHistory = [];
+const twoHandHistory = [];
 
 function updateTranscriptText() {
     liveTranscriptText.textContent = transcriptLines.length
@@ -276,6 +279,7 @@ const DEFAULT_ASL_LABELS = [
     'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'O', 'P', 'Q', 'R', 'S',
     'T', 'U', 'V', 'W', 'X', 'Y',
     'HELLO', 'YES', 'NO', 'PLEASE', 'THANK_YOU', 'SORRY', 'QUESTION', 'HELP', 'I_DONT_UNDERSTAND',
+    'GOOD_MORNING', 'GOOD_AFTERNOON', 'GOOD_AFTERNOON_EVERYONE', 'GOOD_EVENING',
     'OPEN_PALM', 'FIST', 'PEACE', 'THUMBS_UP', 'POINT', 'ILY'
 ];
 
@@ -617,8 +621,35 @@ function pushLandmarkHistory(landmarks) {
     return snapshot;
 }
 
+function pushTwoHandHistory(multiHandLandmarks) {
+    if (!Array.isArray(multiHandLandmarks) || multiHandLandmarks.length < 2) {
+        twoHandHistory.length = 0;
+        return null;
+    }
+
+    const orderedHands = multiHandLandmarks
+        .slice(0, 2)
+        .map(hand => getHandPoseSnapshot(hand))
+        .sort((a, b) => a.palmCenter.y - b.palmCenter.y);
+    const [topHand, bottomHand] = orderedHands;
+    const snapshot = {
+        time: performance.now(),
+        topHand,
+        bottomHand,
+        bothOpen: topHand.openPalm && bottomHand.openPalm,
+        avgScale: averageNumbers([topHand.handScale, bottomHand.handScale]),
+        verticalGap: bottomHand.palmCenter.y - topHand.palmCenter.y,
+        horizontalOffset: Math.abs(topHand.palmCenter.x - bottomHand.palmCenter.x)
+    };
+
+    twoHandHistory.push(snapshot);
+    if (twoHandHistory.length > MAX_LANDMARK_HISTORY) twoHandHistory.shift();
+    return snapshot;
+}
+
 function resetLandmarkHistory() {
     landmarkHistory.length = 0;
+    twoHandHistory.length = 0;
 }
 
 function detectSequenceGesture() {
@@ -656,11 +687,17 @@ function detectSequenceGesture() {
         };
     }
 
-    if (openRatio >= 0.7 && meanY > 0.42 && (start.palmCenter.y - end.palmCenter.y) > avgScale * 0.82 && xRange < avgScale * 1.05) {
+    if (
+        openRatio >= 0.68 &&
+        start.palmCenter.y < 0.5 &&
+        dy > avgScale * 0.34 &&
+        Math.abs(dx) < avgScale * 1.15 &&
+        yChanges <= 1
+    ) {
         return {
             key: 'good_morning_motion',
             label: 'GOOD_MORNING',
-            confidence: 0.79,
+            confidence: 0.8,
             source: 'sequence'
         };
     }
@@ -688,6 +725,52 @@ function detectSequenceGesture() {
             key: 'sorry_circle',
             label: 'SORRY',
             confidence: 0.72,
+            source: 'sequence'
+        };
+    }
+
+    return null;
+}
+
+function detectTwoHandSequenceGesture() {
+    if (twoHandHistory.length < 6) return null;
+
+    const recent = twoHandHistory.slice(-Math.min(14, twoHandHistory.length));
+    const avgScale = Math.max(0.035, averageNumbers(recent.map(frame => frame.avgScale)));
+    const openRatio = recent.filter(frame => frame.bothOpen).length / recent.length;
+    const alignedRatio = recent.filter(frame => frame.horizontalOffset < avgScale * 1.35).length / recent.length;
+    const stackedRatio = recent.filter(frame => frame.verticalGap > avgScale * 0.38).length / recent.length;
+    const topYValues = recent.map(frame => frame.topHand.palmCenter.y);
+    const bottomYValues = recent.map(frame => frame.bottomHand.palmCenter.y);
+    const topXValues = recent.map(frame => frame.topHand.palmCenter.x);
+    const topDy = topYValues[topYValues.length - 1] - topYValues[0];
+    const topDx = topXValues[topXValues.length - 1] - topXValues[0];
+    const topYChanges = countDirectionChanges(topYValues, avgScale * 0.12);
+    const bottomYRange = Math.max(...bottomYValues) - Math.min(...bottomYValues);
+    const startTopY = topYValues[0];
+
+    if (
+        openRatio >= 0.7 &&
+        alignedRatio >= 0.68 &&
+        stackedRatio >= 0.65 &&
+        topDy > avgScale * 0.32 &&
+        Math.abs(topDx) < avgScale * 0.8 &&
+        topYChanges <= 1 &&
+        bottomYRange < avgScale * 0.45
+    ) {
+        if (startTopY < 0.44) {
+            return {
+                key: 'good_evening_motion',
+                label: 'GOOD_EVENING',
+                confidence: 0.82,
+                source: 'sequence'
+            };
+        }
+
+        return {
+            key: 'good_afternoon_everyone',
+            label: 'GOOD_AFTERNOON_EVERYONE',
+            confidence: 0.84,
             source: 'sequence'
         };
     }
@@ -823,6 +906,8 @@ function mapModelLabelToPhrase(label) {
         HAVE_A_NICE_DAY: 'Have a nice day',
         GOOD_MORNING: 'Good morning',
         GOOD_AFTERNOON: 'Good afternoon',
+        GOOD_AFTERNOON_EVERYONE: 'Good afternoon everyone',
+        GOOD_EVENING: 'Good evening',
         GOOD_NIGHT: 'Good night',
         YES: 'Yes',
         NO: 'No',
@@ -916,14 +1001,18 @@ async function onHandsResults(results) {
     gestureOverlayCtx.clearRect(0, 0, gestureOverlayCanvas.width, gestureOverlayCanvas.height);
 
     if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-        const landmarks = results.multiHandLandmarks[0];
-        drawConnectors(gestureOverlayCtx, landmarks, HAND_CONNECTIONS, { color: '#00F5FF', lineWidth: 2 });
-        drawLandmarks(gestureOverlayCtx, landmarks, { color: '#8B3DFF', lineWidth: 1, radius: 3 });
+        results.multiHandLandmarks.forEach(landmarks => {
+            drawConnectors(gestureOverlayCtx, landmarks, HAND_CONNECTIONS, { color: '#00F5FF', lineWidth: 2 });
+            drawLandmarks(gestureOverlayCtx, landmarks, { color: '#8B3DFF', lineWidth: 1, radius: 3 });
+        });
 
-        pushLandmarkHistory(landmarks);
-        const sequencePrediction = detectSequenceGesture();
-        const heuristicPrediction = estimateGesture(landmarks);
-        const modelPrediction = await predictGestureWithModel(landmarks);
+        const primaryLandmarks = results.multiHandLandmarks[0];
+        pushLandmarkHistory(primaryLandmarks);
+        pushTwoHandHistory(results.multiHandLandmarks);
+        const twoHandPrediction = detectTwoHandSequenceGesture();
+        const sequencePrediction = twoHandPrediction || detectSequenceGesture();
+        const heuristicPrediction = estimateGesture(primaryLandmarks);
+        const modelPrediction = await predictGestureWithModel(primaryLandmarks);
         const estimated = sequencePrediction || (
             modelPrediction && modelPrediction.confidence >= 0.5
                 ? modelPrediction
